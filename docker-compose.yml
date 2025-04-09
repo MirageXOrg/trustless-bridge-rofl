@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  oracle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trustless-bridge-oracle
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    # Example command with required arguments
+    command: ["--contract-address", "0x1234567890123456789012345678901234567890", "--network", "sapphire-localnet", "--bitcoin-network", "testnet"]
+    # Remove the volumes to ensure the container uses the built files
+    # volumes:
+    #   - ./src:/app/src
+    #   - ./dist:/app/dist 
