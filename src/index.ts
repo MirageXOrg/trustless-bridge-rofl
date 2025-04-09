@@ -45,9 +45,9 @@ async function main() {
   
   // await oracle.run();
 
-  const btcConn = new BitcoinConnection('testnet', '1wSjQB5nARU27CiumPiwHruuCAgxHzyRx');
+  const btcConn = new BitcoinConnection('mainnet', '3CwpCRay2Gc8G7j5LND1snQZbocZLjD3fC');
 
-  console.log(await btcConn.fetchTransactionInfo('46ebe264b0115a439732554b2b390b11b332b5b5692958b1754aa0ee57b64265'))
+  console.log(await btcConn.fetchTransactionInfo('ff443f5a39026e6c9969c9a4f6fc699d42ce43ba1677c709d6467e8e3fe31f70'))
 }
 
 // Run the main function

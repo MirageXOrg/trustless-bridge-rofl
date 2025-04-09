@@ -60,7 +60,7 @@ export class TrustlessBridgeOracle {
       await this.initializeSapphireConnection();
       
       // Initialize Bitcoin connection
-      this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork);
+      this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork, "");
       
       console.log(`Connected to contract ${this.contractAddress}`);
       console.log(`Using Bitcoin ${this.bitcoinNetwork} network`);
@@ -131,13 +131,15 @@ export class TrustlessBridgeOracle {
           
           // Step 2: Verify the signature against the transaction sender
           console.log(`Verifying signature for transaction ${txHash}...`);
-          const isValid = await this.bitcoinConnection.verifySignature(
-            txHash, 
-            signature, 
-            ethereumAddress, 
-            txInfo.sender
-          );
-          
+          let isValid = false;
+          if (txInfo.sender) {
+              isValid = await this.bitcoinConnection.verifySignature(
+              txHash, 
+              signature, 
+              ethereumAddress, 
+              txInfo.sender
+            );
+          }
           if (isValid) {
             console.log(`Signature verification successful for transaction ${txHash}`);
             // Process the transaction information
