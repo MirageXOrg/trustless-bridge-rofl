@@ -1,6 +1,8 @@
 import Client = require('bitcoin-core');
 import * as bitcoin from 'bitcoinjs-lib';
 import ECPair from 'ecpair';
+import * as bitcoinMessage from 'bitcoinjs-message';
+import * as bs58 from 'bs58';
 
 /**
  * Interface for Bitcoin RPC node configuration
@@ -10,6 +12,8 @@ export interface BitcoinRpcNode {
   username: string;
   password: string;
   name: string; // Optional name for the node (e.g., "My Node", "BlockCypher", etc.)
+  timeout?: number; // Optional timeout in milliseconds
+  ssl?: boolean; // Whether to use SSL for the connection
 }
 
 /**
@@ -22,6 +26,8 @@ export interface BitcoinTransactionInfo {
   receiver: string | null; // Can be null if the tracked address is not a receiver
   confirmations: number;
   provider: string;
+  timestamp?: number; // Optional timestamp of the transaction
+  blockHeight?: number; // Optional block height
 }
 
 /**
@@ -32,6 +38,7 @@ export class BitcoinConnection {
   private rpcNodes: BitcoinRpcNode[];
   private network: bitcoin.networks.Network;
   private trackedAddress: string;
+  private clients: Map<string, Client> = new Map();
 
   /**
    * Constructor for BitcoinConnection
@@ -56,8 +63,8 @@ export class BitcoinConnection {
     if (rpcNodes.length === 0) {
       this.rpcNodes = [
         {
-          //url: 'https://bitcoin-testnet-rpc.publicnode.com/',
-          url: 'https://bitcoin-rpc.publicnode.com/',
+          url: 'https://bitcoin-testnet-rpc.publicnode.com/',
+          //url: 'https://bitcoin-rpc.publicnode.com/',
           username: '',
           password: '',
           name: 'local-node'
@@ -69,6 +76,47 @@ export class BitcoinConnection {
   }
 
   /**
+   * Initialize connections to all RPC nodes
+   */
+  async initializeConnections(): Promise<void> {
+    console.log('Initializing connections to Bitcoin RPC nodes...');
+    
+    for (const node of this.rpcNodes) {
+      try {
+        // Create client configuration
+        const clientConfig: any = {
+          host: node.url,
+          username: node.username,
+          password: node.password,
+          timeout: node.timeout || 30000,
+        };
+        
+        // Add ssl property if needed
+        if (node.ssl || node.url.startsWith('https')) {
+          (clientConfig as any).ssl = true;
+        }
+        
+        // Initialize Bitcoin Core client for this node
+        const client = new Client(clientConfig);
+        
+        // Test the connection
+        await (client as any).getBlockchainInfo();
+        
+        // Store the client
+        this.clients.set(node.name || node.url, client);
+        
+        console.log(`Successfully connected to ${node.name || node.url}`);
+      } catch (error) {
+        console.error(`Failed to connect to ${node.name || node.url}:`, error);
+      }
+    }
+    
+    if (this.clients.size === 0) {
+      throw new Error('Failed to connect to any Bitcoin RPC nodes');
+    }
+  }
+
+  /**
    * Fetch Bitcoin transaction information from multiple RPC nodes
    * @param txHash - Bitcoin transaction hash
    * @returns Bitcoin transaction information
@@ -76,9 +124,14 @@ export class BitcoinConnection {
   async fetchTransactionInfo(txHash: string): Promise<BitcoinTransactionInfo> {
     console.log(`Fetching Bitcoin transaction info for ${txHash} from multiple nodes...`);
     
+    // Initialize connections if not already done
+    if (this.clients.size === 0) {
+      await this.initializeConnections();
+    }
+    
     // Fetch transaction info from all nodes in parallel
-    const nodePromises = this.rpcNodes.map(node => 
-      this.fetchFromNode(node, txHash)
+    const nodePromises = Array.from(this.clients.entries()).map(([nodeName, client]) => 
+      this.fetchFromNode(nodeName, client, txHash)
     );
     
     // Wait for all nodes to respond
@@ -108,21 +161,14 @@ export class BitcoinConnection {
 
   /**
    * Fetch transaction information from a specific node
-   * @param node - Bitcoin RPC node configuration
+   * @param nodeName - Name of the node
+   * @param client - Bitcoin Core client
    * @param txHash - Bitcoin transaction hash
    * @returns Bitcoin transaction information
    */
-  private async fetchFromNode(node: BitcoinRpcNode, txHash: string): Promise<BitcoinTransactionInfo | null> {
+  private async fetchFromNode(nodeName: string, client: Client, txHash: string): Promise<BitcoinTransactionInfo | null> {
     try {
-      console.log(`Fetching from node: ${node.name || node.url}`);
-      
-      // Initialize Bitcoin Core client for this node
-      const client = new Client({
-        host: node.url,
-        username: node.username,
-        password: node.password,
-        timeout: 30000,
-      });
+      console.log(`Fetching from node: ${nodeName}`);
       
       // Get raw transaction with verbose output
       const tx = await (client as any).getRawTransaction(txHash, 1);
@@ -130,8 +176,6 @@ export class BitcoinConnection {
       if (!tx) {
         throw new Error(`Transaction ${txHash} not found`);
       }
-      
-      console.log(`Transaction data: ${JSON.stringify(tx, null, 2)}`);
       
       // Calculate amount for tracked address and find if it's a receiver
       let totalAmount = 0;
@@ -276,43 +320,61 @@ export class BitcoinConnection {
         }
       }
       
+      // Get additional transaction details
+      let timestamp = undefined;
+      let blockHeight = undefined;
+      
+      if (tx.blockhash) {
+        try {
+          const block = await (client as any).getBlock(tx.blockhash);
+          if (block) {
+            timestamp = block.time;
+            blockHeight = block.height;
+          }
+        } catch (e) {
+          console.error('Error fetching block details:', e);
+        }
+      }
+      
       return {
         txHash,
         amount: isTrackedAddressReceiver ? totalAmount : 0,
         sender: senders.length > 0 ? senders : null,
         receiver: isTrackedAddressReceiver ? this.trackedAddress : null,
         confirmations: tx.confirmations || 0,
-        provider: node.name || new URL(node.url).hostname
+        provider: nodeName,
+        timestamp,
+        blockHeight
       };
     } catch (error) {
-      console.error(`RPC Error from ${node.name || node.url}:`, error);
+      console.error(`RPC Error from ${nodeName}:`, error);
       return null;
     }
   }
 
+
   /**
    * Verify a Bitcoin signature against a transaction
-   * @param txHash - Bitcoin transaction hash
+   * @param message - The message that was signed
    * @param signature - Signature to verify
-   * @param ethereumAddress - Ethereum address that was part of the signed message
    * @param signerAddress - Bitcoin address of the signer (from transaction)
    * @returns Whether the signature is valid and matches the transaction sender
    */
-  async verifySignature(txHash: string, signature: string, ethereumAddress: string, signerAddress: string): Promise<boolean> {
+  async verifySignature(message: string, signature: string, signerAddress: string): Promise<boolean> {
     try {
-      // Extract the Bitcoin address from the signature
-      const extractedAddress = this.extractAddressFromSignature(signature, txHash, ethereumAddress);
+      console.log('Verifying signature:', {
+        message,
+        signature,
+        signerAddress
+      });
       
-      if (!extractedAddress) {
-        console.error('Failed to extract Bitcoin address from signature');
-        return false;
-      }
+      // Format the signature to be compatible with bitcoinjs-message
+      // const formattedSignature = this.formatSignature(signature);
+      // console.log('Formatted signature:', formattedSignature);
       
-      console.log(`Extracted Bitcoin address from signature: ${extractedAddress}`);
-      console.log(`Expected signer address: ${signerAddress}`);
-      
-      // Compare the extracted address with the provided signer address
-      const isValid = extractedAddress === signerAddress;
+      // Verify the signature directly using bitcoinjs-message
+      // For Electrum segwit signatures, we need to pass checkSegwitAlways=true
+      const isValid = bitcoinMessage.verify(message, signerAddress, signature, this.network.messagePrefix, true);
       
       if (isValid) {
         console.log('Signature verification successful: Address matches signer');
@@ -324,74 +386,6 @@ export class BitcoinConnection {
     } catch (error) {
       console.error('Error verifying signature:', error);
       return false;
-    }
-  }
-
-  /**
-   * Extract a Bitcoin address from a signature
-   * @param signature - Signature to extract address from
-   * @param txHash - Bitcoin transaction hash that was signed
-   * @param ethereumAddress - Ethereum address that was part of the signed message
-   * @returns Bitcoin address that created the signature, or null if extraction failed
-   */
-  private extractAddressFromSignature(signature: string, txHash: string, ethereumAddress: string): string | null {
-    try {
-      // The message that was signed is txHash + ethereumAddress
-      const message = txHash + ethereumAddress;
-      
-      // Convert the signature from hex to buffer
-      const signatureBuffer = Buffer.from(signature, 'hex');
-      
-      // Create a message hash
-      const messageHash = bitcoin.crypto.sha256(Buffer.from(message));
-      
-      // Try to recover the public key from the signature
-      // This is a simplified approach - in a real implementation, you would need to
-      // handle different signature types and recovery methods
-      const recoveredPublicKey = this.recoverPublicKeyFromSignature(signatureBuffer, messageHash);
-      
-      if (!recoveredPublicKey) {
-        console.error('Failed to recover public key from signature');
-        return null;
-      }
-      
-      // Derive the Bitcoin address from the public key
-      const { address } = bitcoin.payments.p2pkh({ 
-        pubkey: recoveredPublicKey,
-        network: this.network
-      });
-      
-      return address || null;
-    } catch (error) {
-      console.error('Error extracting address from signature:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Recover a public key from a signature
-   * @param signature - Signature to recover public key from
-   * @param messageHash - Hash of the message that was signed
-   * @returns Recovered public key, or null if recovery failed
-   */
-  private recoverPublicKeyFromSignature(signature: Buffer, messageHash: Buffer): Buffer | null {
-    try {
-      // This is a simplified approach - in a real implementation, you would need to
-      // handle different signature types and recovery methods
-      
-      // For demonstration purposes, we'll use a dummy approach
-      // In a real implementation, you would use a proper signature recovery method
-      
-      // Create a dummy key pair for demonstration
-      const ecc = require('tiny-secp256k1');
-      const ECPairFactory = ECPair(ecc);
-      const keyPair = ECPairFactory.makeRandom({ network: this.network });
-      
-      // Return the public key
-      return Buffer.from(keyPair.publicKey);
-    } catch (error) {
-      console.error('Error recovering public key from signature:', error);
-      return null;
     }
   }
 
@@ -410,7 +404,7 @@ export class BitcoinConnection {
     
     return results.every(result => 
       result.amount === firstResult.amount &&
-      result.sender === firstResult.sender &&
+      JSON.stringify(result.sender) === JSON.stringify(firstResult.sender) &&
       result.receiver === firstResult.receiver &&
       result.confirmations === firstResult.confirmations
     );
@@ -434,7 +428,7 @@ export class BitcoinConnection {
     const counts = new Map<string, { count: number, result: BitcoinTransactionInfo }>();
     
     results.forEach(result => {
-      const key = `${result.amount}-${result.sender}-${result.receiver}-${result.confirmations}`;
+      const key = `${result.amount}-${JSON.stringify(result.sender)}-${result.receiver}-${result.confirmations}`;
       
       if (counts.has(key)) {
         counts.get(key)!.count++;
