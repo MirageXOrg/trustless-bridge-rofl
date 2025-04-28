@@ -123,6 +123,9 @@ export class SapphireConnection {
     if (!this.wrappedProvider) {
       throw new Error('Provider not initialized. Call connect() first.');
     }
+    if (!this.wallet) {
+      throw new Error('Wallet not initialized. Call initializeWallet() first.');
+    }
     
     this.contract = this.getContractWithErrorHandling(contractAddress, contractAbi);
     console.log(`Connected to contract at ${contractAddress}`);
@@ -193,8 +196,11 @@ export class SapphireConnection {
     if (!this.wrappedProvider) {
       throw new Error('Provider not initialized. Call connect() first.');
     }
+    if (!this.wallet) {
+      throw new Error('Wallet not initialized. Call initializeWallet() first.');
+    }
     
-    const contract = new Contract(address, abi, this.wrappedProvider);
+    const contract = new Contract(address, abi, this.wallet);
     
     // Add error handling to the contract
     const originalCall = contract.call as unknown as BaseContractMethod<any[], any, any>;

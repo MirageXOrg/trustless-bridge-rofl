@@ -41,7 +41,7 @@ export class TrustlessBridgeOracle {
     // Load the contract ABI
     try {
       const abiPath = path.resolve(__dirname, 'abi', 'TrustlessBTC.json');
-      this.contractAbi = JSON.parse(fs.readFileSync(abiPath, 'utf8'));
+      this.contractAbi = (JSON.parse(fs.readFileSync(abiPath, 'utf8'))).abi;
     } catch (error) {
       console.error('Failed to load contract ABI:', error);
       this.contractAbi = [];
@@ -58,11 +58,13 @@ export class TrustlessBridgeOracle {
     try {
       // Initialize Sapphire connection
       await this.initializeSapphireConnection();
+
+      const bitcoinAddress = await this.sapphireConnection?.getContract().bitcoinAddress();
       
       // Initialize Bitcoin connection
-      this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork, "");
+      this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork, bitcoinAddress);
       
-      console.log(`Connected to contract ${this.contractAddress}`);
+      console.log(`Connected to contract ${this.contractAddress}, monitoring ${bitcoinAddress}`);
       console.log(`Using Bitcoin ${this.bitcoinNetwork} network`);
       console.log('Oracle is running and listening for events...');
 
@@ -126,25 +128,37 @@ export class TrustlessBridgeOracle {
           
           // Step 1: Fetch Bitcoin transaction information
           console.log(`Fetching Bitcoin transaction info for ${txHash}...`);
-          const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash);
+          const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash.slice(2));
           console.log(`Bitcoin transaction info:`, txInfo);
           
           // Step 2: Verify the signature against the transaction sender
           console.log(`Verifying signature for transaction ${txHash}...`);
           let isValid = false;
-          if (txInfo.sender) {
+          if (txInfo.sender && txInfo.sender.length == 1) {
               isValid = await this.bitcoinConnection.verifySignature(
-              txHash, 
-              signature, 
-              ethereumAddress, 
-              txInfo.sender
+              txHash+ethereumAddress, 
+              signature,
+              txInfo.sender[0]
             );
           }
           if (isValid) {
             console.log(`Signature verification successful for transaction ${txHash}`);
             // Process the transaction information
             console.log(`Processing TransactionProofSubmitted for transaction ${txHash}`);
-            // Additional processing logic can be added here
+            try {
+              // Call the mint function on the contract
+              const contract = this.sapphireConnection!.getContract();
+              const mintTx = await contract.mint(
+                ethereumAddress,
+                txInfo.amount,
+                txHash
+              );
+              console.log(`Mint transaction sent: ${mintTx.hash}`);
+              await mintTx.wait();
+              console.log('Mint transaction confirmed');
+            } catch (mintError) {
+              console.error('Error sending mint transaction:', mintError);
+            }
           } else {
             console.error(`Signature verification failed for transaction ${txHash}`);
             // Handle invalid signature case
@@ -213,7 +227,7 @@ export class TrustlessBridgeOracle {
     };
     
     // Get the network from environment or default to localnet
-    const network = process.env.NETWORK || 'sapphire-localnet';
+    const network = process.env.NETWORK || 'sapphire-testnet';
     
     // Return the RPC URLs for the network
     return rpcUrls[network] || rpcUrls['sapphire-localnet'];
