@@ -7,7 +7,7 @@
     "trustless-bridge-oracle": "./dist/index.js"
   },
   "scripts": {
-    "start": "ts-node src/index.ts -c ''",
+    "start": "ts-node src/index.ts -c '0xBb7cE857049e97018e6D847Aaf1596f5fE1c20b9' -n 'testnet' -b 'testnet'",
     "build": "tsc",
     "dev": "ts-node",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -30,6 +30,7 @@
     "bitcoinjs-lib": "^6.1.7",
     "bitcoinjs-message": "^2.2.0",
     "commander": "^11.1.0",
+    "dotenv": "^16.5.0",
     "ethers": "^6.13.5",
     "siwe": "^3.0.0",
     "tiny-secp256k1": "^2.2.3"

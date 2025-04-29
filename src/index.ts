@@ -3,7 +3,10 @@
 import { Command } from 'commander';
 import { RoflUtility } from './RoflUtility';
 import { TrustlessBridgeOracle } from './TrustlessBridgeOracle';
-import { BitcoinConnection } from './BitcoinConnection';
+import * as dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
 
 /**
  * Main function for the Trustless Bridge ROFL Oracle CLI tool.
@@ -23,31 +26,50 @@ async function main() {
     .option('-k, --kms <url>', 'Override ROFL\'s appd service URL', '')
     .option('-i, --key-id <id>', 'Override the oracle\'s secret key ID on KMS', 'trustless-bridge-oracle')
     .option('-s, --secret <secret>', 'Secret key of the oracle account (only for testing)')
+    .option('--sapphire-rpc <urls>', 'Comma-separated list of Sapphire RPC URLs')
+    .option('--bitcoin-rpc <nodes>', 'JSON string of Bitcoin RPC nodes configuration')
+    .option('--bitcoin-api-configs <configs>', 'JSON string of Bitcoin API configurations. Example: \'[{"url":"https://api.example.com","name":"Example API","priority":1}]\'')
     .parse(process.argv);
   
   const options = program.opts();
-  
-  console.log(`Starting Trustless Bridge ROFL Oracle service. Using contract ${options.contractAddress} on ${options.network} with Bitcoin ${options.bitcoinNetwork}.`);
-  
-  // const roflUtility = new RoflUtility(options.kms);
-  // let secret = options.secret;
-  
-  // if (!secret) {
-  //   secret = await roflUtility.fetchKey(options.keyId);
-  // }
-  
-  // const oracle = new TrustlessBridgeOracle(
-  //   options.contractAddress,
-  //   options.bitcoinNetwork,
-  //   roflUtility,
-  //   secret
-  // );
-  
-  // await oracle.run();
 
-  const btcConn = new BitcoinConnection('mainnet', '3CwpCRay2Gc8G7j5LND1snQZbocZLjD3fC');
+  if (!options.bitcoinNetwork) {
+    process.env.BITCOIN_NETWORK = options.bitcoinNetwork;
+  }
 
-  console.log(await btcConn.fetchTransactionInfo('ff443f5a39026e6c9969c9a4f6fc699d42ce43ba1677c709d6467e8e3fe31f70'))
+  if (options.network) {
+    process.env.NETWORK = options.network;
+  }
+  // Set environment variables from CLI options if provided
+  if (options.sapphireRpc) {
+    process.env.SAPPHIRE_RPC_URLS = options.sapphireRpc;
+  }
+  if (options.bitcoinRpc) {
+    process.env.BITCOIN_RPC_NODES = options.bitcoinRpc;
+  }
+  if (options.bitcoinApiConfigs) {
+    process.env.BITCOIN_API_CONFIGS = options.bitcoinApiConfigs;
+  }
+  
+  console.log(`[TrustlessBridgeOracle] Starting service. Contract: ${options.contractAddress}, Network: ${options.network}, Bitcoin: ${options.bitcoinNetwork}`);
+  
+  const roflUtility = new RoflUtility(options.kms);
+  let secret = options.secret;
+  
+  if (process.env.ORACLE_SECRET) { // override for testing
+    secret = process.env.ORACLE_SECRET;
+  } else if (!secret) {
+    secret = await roflUtility.fetchKey(options.keyId);
+  }
+  
+  const oracle = new TrustlessBridgeOracle(
+    options.contractAddress,
+    options.bitcoinNetwork,
+    roflUtility,
+    secret
+  );
+  
+  await oracle.run();
 }
 
 // Run the main function

@@ -15,11 +15,11 @@ export class RoflUtility {
     this.url = url;
     
     if (this.url && !this.url.startsWith('http')) {
-      console.log(`Using HTTP socket: ${this.url}`);
+      console.log(`[Rofl] Using HTTP socket: ${this.url}`);
     } else if (!this.url) {
-      console.log(`Using unix domain socket: ${this.ROFL_SOCKET_PATH}`);
+      console.log(`[Rofl] Using unix domain socket: ${this.ROFL_SOCKET_PATH}`);
     } else {
-      console.log(`Using HTTP URL: ${this.url}`);
+      console.log(`[Rofl] Using HTTP URL: ${this.url}`);
     }
   }
 
@@ -33,7 +33,7 @@ export class RoflUtility {
     const baseUrl = this.url && this.url.startsWith('http') ? this.url : 'http://localhost';
     const fullUrl = `${baseUrl}${path}`;
     
-    console.log(`Posting ${JSON.stringify(payload)} to ${fullUrl}`);
+    console.log(`[Rofl] Sending request to: ${fullUrl}`);
     
     try {
       // In a real implementation, we would need to handle Unix domain sockets

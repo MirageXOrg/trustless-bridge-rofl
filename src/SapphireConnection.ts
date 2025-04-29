@@ -75,7 +75,7 @@ export class SapphireConnection {
    * @returns A promise that resolves when connected
    */
   async connect(): Promise<void> {
-    console.log('Connecting to Oasis Sapphire...');
+    console.log('[Sapphire] Initializing connection...');
     
     // Try each RPC URL until one works
     let connected = false;
@@ -86,7 +86,7 @@ export class SapphireConnection {
       const rpcUrl = this.rpcUrls[rpcIndex];
       
       try {
-        console.log(`Trying RPC URL: ${rpcUrl}`);
+        console.log(`[Sapphire] Attempting connection to: ${rpcUrl}`);
         
         // Create a provider
         this.provider = new JsonRpcProvider(rpcUrl);
@@ -100,7 +100,7 @@ export class SapphireConnection {
         // Update the current RPC index
         this.currentRpcIndex = rpcIndex;
         
-        console.log(`Successfully connected to ${rpcUrl}`);
+        console.log(`[Sapphire] Connected successfully to: ${rpcUrl}`);
         connected = true;
         break;
       } catch (error) {
@@ -129,7 +129,7 @@ export class SapphireConnection {
     // Wrap the wallet with Sapphire privacy
     this.wrappedWallet = wrapEthersSigner(this.wallet);
     
-    console.log('Wallet initialized with private key');
+    console.log('[Sapphire] Wallet initialized');
   }
 
   /**
@@ -176,7 +176,7 @@ export class SapphireConnection {
       return await (directContract as any).publicKey();
     };
     
-    console.log(`Connected to contract at ${contractAddress}`);
+    console.log(`[Sapphire] Contract connection established at: ${contractAddress}`);
   }
 
   /**
@@ -184,7 +184,7 @@ export class SapphireConnection {
    * @returns A promise that resolves when reconnected
    */
   async reconnect(): Promise<void> {
-    console.log('Reconnecting to Oasis Sapphire...');
+    console.log('[Sapphire] Reconnection attempt initiated');
     
     // Try the next RPC URL
     this.currentRpcIndex = (this.currentRpcIndex + 1) % this.rpcUrls.length;
@@ -203,7 +203,7 @@ export class SapphireConnection {
     
     // If already reconnecting, don't start another reconnection attempt
     if (this.isReconnecting) {
-      console.log('Already attempting to reconnect, skipping...');
+      console.log('[Sapphire] Reconnection already in progress, skipping');
       return;
     }
     
@@ -212,7 +212,7 @@ export class SapphireConnection {
     try {
       // Try to reconnect
       await this.reconnect();
-      console.log('Successfully reconnected to a new RPC URL');
+      console.log('[Sapphire] Reconnection successful');
       this.reconnectAttempts = 0;
     } catch (reconnectError) {
       console.error('Failed to reconnect:', reconnectError);
@@ -224,7 +224,7 @@ export class SapphireConnection {
       }
       
       // Wait before trying again
-      console.log(`Waiting ${this.RECONNECT_DELAY_MS}ms before trying again...`);
+      console.log(`[Sapphire] Waiting ${this.RECONNECT_DELAY_MS}ms before next attempt`);
       await new Promise(resolve => setTimeout(resolve, this.RECONNECT_DELAY_MS));
       
       // Try again

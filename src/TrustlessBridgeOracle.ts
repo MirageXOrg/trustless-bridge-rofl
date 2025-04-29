@@ -1,9 +1,10 @@
 import { RoflUtility } from './RoflUtility';
 import { SapphireConnection } from './SapphireConnection';
-import { BitcoinConnection, BitcoinTransactionInfo } from './BitcoinConnection';
+import { BitcoinConnection } from './BitcoinConnection';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Contract, ethers } from 'ethers';
+import { ethers } from 'ethers';
+import { getSapphireRpcUrls } from './config';
 
 /**
  * Class representing the Trustless Bridge ROFL Oracle
@@ -53,7 +54,7 @@ export class TrustlessBridgeOracle {
     const walletAddress = this.sapphireConnection?.getWallet().address;
 
     if (oracleAddress != walletAddress) { 
-      console.log(`Contract oracle ${oracleAddress} does not match our address ${walletAddress}, updating...`);
+      console.log(`[Oracle] Updating contract oracle from ${oracleAddress} to ${walletAddress}`);
       
       try {
         const contract = this.sapphireConnection!.getContract();
@@ -67,23 +68,23 @@ export class TrustlessBridgeOracle {
         };
         
         const txHash = await this.roflUtility.submitTx(txParams);
-        console.log(`Transaction sent: ${txHash}`);
+        console.log(`[Oracle] Update transaction sent: ${txHash}`);
         
         const receipt = await this.sapphireConnection!.getProvider().waitForTransaction(txHash);
-        console.log(`Updated. Transaction hash: ${receipt.transactionHash}`);
+        console.log(`[Oracle] Update confirmed: ${receipt.transactionHash}`);
       } catch (error) {
         console.error('Error updating oracle:', error);
         throw error;
       }
     }
-    console.log(`Using Oracle ${oracleAddress}`);
+    console.log(`[Oracle] Using oracle address: ${oracleAddress}`);
   }
 
   /**
    * Run the oracle
    */
   async run(): Promise<void> {
-    console.log('Starting Trustless Bridge ROFL Oracle...');
+    console.log('[Oracle] Service starting...');
     this.isRunning = true;
 
     try {
@@ -96,8 +97,9 @@ export class TrustlessBridgeOracle {
       // Initialize Bitcoin connection
       this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork, bitcoinAddress);
       
-      console.log(`Connected to contract ${this.contractAddress}, monitoring ${bitcoinAddress}`);
-      console.log(`Using Bitcoin ${this.bitcoinNetwork} network`);
+      console.log(`[Oracle] Connected to contract ${this.contractAddress}`);
+      console.log(`[Oracle] Monitoring Bitcoin address: ${bitcoinAddress}`);
+      console.log(`[Oracle] Using Bitcoin network: ${this.bitcoinNetwork}`);
       console.log('Oracle is running and listening for events...');
 
       // Set up event listeners
@@ -106,7 +108,6 @@ export class TrustlessBridgeOracle {
       // Keep the process running
       while (this.isRunning) {
         await new Promise(resolve => setTimeout(resolve, this.poolInterval));
-        console.log('Oracle is still running...');
       }
     } catch (error) {
       console.error('Error running oracle:', error);
@@ -119,8 +120,9 @@ export class TrustlessBridgeOracle {
    * Initialize the Sapphire connection
    */
   private async initializeSapphireConnection(): Promise<void> {
-    // Define RPC URLs based on the network
-    const rpcUrls = this.getRpcUrls();
+    // Get RPC URLs from environment or defaults
+    const network = process.env.NETWORK || 'testnet';
+    const rpcUrls = getSapphireRpcUrls(network);
     
     // Create Sapphire connection
     this.sapphireConnection = new SapphireConnection(rpcUrls);
@@ -133,6 +135,8 @@ export class TrustlessBridgeOracle {
     
     // Connect to the contract
     this.sapphireConnection.connectToContract(this.contractAddress, this.contractAbi);
+
+    console.log('[Oracle] Event listeners initialized');
   }
 
   /**
@@ -147,187 +151,156 @@ export class TrustlessBridgeOracle {
     
     // Listen for TransactionProofSubmitted events
     this.eventListeners.transactionProofSubmitted = contract.on('TransactionProofSubmitted', 
-      async (txHash, signature, ethereumAddress) => {
-        console.log(`TransactionProofSubmitted event received: ${txHash}`);
-        console.log(`Signature: ${signature}`);
-        console.log(`Ethereum Address: ${ethereumAddress}`);
-        
-        try {
-          // Check if Bitcoin connection is initialized
-          if (!this.bitcoinConnection) {
-            throw new Error('Bitcoin connection not initialized');
-          }
-          
-          // Step 1: Fetch Bitcoin transaction information
-          console.log(`Fetching Bitcoin transaction info for ${txHash}...`);
-          const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash.slice(2));
-          console.log(`Bitcoin transaction info:`, txInfo);
-          
-          // Step 2: Verify the signature against the transaction sender
-          console.log(`Verifying signature for transaction ${txHash}...`);
-          let isValid = false;
-          if (txInfo.sender && txInfo.sender.length == 1) {
-              isValid = await this.bitcoinConnection.verifySignature(
-              txHash+ethereumAddress, 
-              signature,
-              txInfo.sender[0]
-            );
-          }
-          if (isValid) {
-            console.log(`Signature verification successful for transaction ${txHash}`);
-            // Process the transaction information
-            console.log(`Processing TransactionProofSubmitted for transaction ${txHash}`);
-            try {
-              // Call the mint function on the contract
-              const contract = this.sapphireConnection!.getContract();
-              const mintTx = await contract.mint(
-                ethereumAddress,
-                txInfo.amount,
-                txHash
-              );
-              console.log(`Mint transaction sent: ${mintTx.hash}`);
-              await mintTx.wait();
-              console.log('Mint transaction confirmed');
-            } catch (mintError) {
-              console.error('Error sending mint transaction:', mintError);
-            }
-          } else {
-            console.error(`Signature verification failed for transaction ${txHash}`);
-            // Handle invalid signature case
-            // For example, you might want to emit an event or take other actions
-          }
-        } catch (error) {
-          console.error('Error handling TransactionProofSubmitted event:', error);
-        }
-      }
+      this.handleTransactionProofSubmitted.bind(this)
     );
     
     // Listen for BurnGenerateTransaction events
     this.eventListeners.burnGenerateTransaction = contract.on('BurnGenerateTransaction', 
-      async (burnId, event) => {
-        console.log(`BurnGenerateTransaction event received for burnId: ${burnId}`);
-        
-        try {
-          // Fetch burn data from the contract
-          const burnInfo = await contract.burnData(burnId);
-          console.log('Burn Information:');
-          console.log(`User: ${burnInfo.user}`);
-          console.log(`Amount: ${burnInfo.amount}`);
-          console.log(`Timestamp: ${burnInfo.timestamp}`);
-          console.log(`Bitcoin Address: ${burnInfo.bitcoinAddress}`);
-          console.log(`Status: ${burnInfo.status}`);
-          console.log(`Transaction Hash: ${burnInfo.transactionHash}`);
-
-          if (burnInfo.status == 1) {
-            try {
-              if (!this.bitcoinConnection) {
-                throw new Error('Bitcoin connection not initialized');
-              }
-
-              // Generate and sign the Bitcoin transaction
-              const { rawTxHex, txHash } = await this.bitcoinConnection.generateAndSignTransaction(
-                burnInfo.bitcoinAddress,
-                burnInfo.amount,
-                this.sapphireConnection!
-              );
-
-              console.log(`Raw transaction hex: ${rawTxHex}`);
-              const rawTx = ethers.toUtf8Bytes(rawTxHex);
-
-
-              const updateTx = await contract.burnSigned(burnId, rawTx, `0x${txHash}`);
-              await updateTx.wait();
-
-              // Send the transaction to the Bitcoin network
-              await this.bitcoinConnection.sendRawTransaction(rawTxHex);
-              console.log(`Bitcoin transaction sent: ${txHash}`);
-
-              
-              console.log(`Burn status updated for burnId: ${burnId}`);
-            } catch (error) {
-              console.error('Error updating burn status:', error);
-            }
-          } else {
-            console.log(`Burn skipped for burnId: ${burnId}`);
-          }
-          
-        } catch (error) {
-          console.error('Error handling BurnGenerateTransaction event:', error);
-        }
-      }
+      this.handleBurnGenerateTransaction.bind(this)
     );
     
     // Listen for BurnValidateTransaction events
     this.eventListeners.burnValidateTransaction = contract.on('BurnValidateTransaction', 
-      async (burnId, event) => {
-        console.log(`BurnValidateTransaction event received for burnId: ${burnId}`);
-      
-        try {
-          const burnInfo = await contract.burnData(burnId);
-          if (burnInfo.status == 2) {
-          const txHash = burnInfo.transactionHash.slice(2);
-
-          // Check if Bitcoin connection is initialized
-          if (!this.bitcoinConnection) {
-            throw new Error('Bitcoin connection not initialized');
-          }
-
-          // Fetch Bitcoin transaction information
-          console.log(`Fetching Bitcoin transaction info for ${txHash}...`);
-          const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash);
-          console.log(`Bitcoin transaction info:`, txInfo);
-
-          // Check if transaction has 6 or more confirmations
-          if (txInfo.confirmations >= 6) {
-            console.log(`Transaction ${txHash} has ${txInfo.confirmations} confirmations, validating burn...`);
-            const updateTx = await contract.validateBurn(burnId);
-            await updateTx.wait();
-            console.log(`Burn validated for burnId: ${burnId}`);
-          } else {
-            console.log(`Transaction ${txHash} has only ${txInfo.confirmations} confirmations, waiting for more confirmations...`);
-            }
-          }
-        } catch (error) {
-          console.error('Error handling BurnValidateTransaction event:', error);
-        }
-      }
+      this.handleBurnValidateTransaction.bind(this)
     );
-    
-    console.log('Event listeners set up successfully');
   }
 
-  /**
-   * Get RPC URLs based on the network
-   * @returns Array of RPC URLs
-   */
-  private getRpcUrls(): string[] {
-    // Default RPC URLs for Sapphire networks
-    const rpcUrls: { [key: string]: string[] } = {
-      'sapphire': [
-        'https://sapphire.oasis.io',
-        'https://sapphire-rpc.oasis.io'
-      ],
-      'sapphire-testnet': [
-        'https://testnet.sapphire.oasis.io',
-        'https://testnet.sapphire-rpc.oasis.io'
-      ],
-      'sapphire-localnet': [
-        'http://localhost:8545'
-      ]
-    };
+  private async handleTransactionProofSubmitted(txHash: string, signature: string, ethereumAddress: string): Promise<void> {
+    console.log(`[Oracle] Received TransactionProofSubmitted: ${txHash}`);
     
-    // Get the network from environment or default to localnet
-    const network = process.env.NETWORK || 'sapphire-testnet';
+    try {
+      // Check if Bitcoin connection is initialized
+      if (!this.bitcoinConnection) {
+        throw new Error('Bitcoin connection not initialized');
+      }
+      
+      // Step 1: Fetch Bitcoin transaction information
+      const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash.slice(2));
+      console.log(`Bitcoin transaction info:`, txInfo);
+      
+      // Step 2: Verify the signature against the transaction sender
+      console.log(`[Oracle] Signature verified: ${txHash}`);
+      let isValid = false;
+      if (txInfo.sender && txInfo.sender.length == 1) {
+          isValid = await this.bitcoinConnection.verifySignature(
+          txHash+ethereumAddress, 
+          signature,
+          txInfo.sender[0]
+        );
+      }
+      if (isValid) {
+        console.log(`Signature verification successful for transaction ${txHash}`);
+        await this.processValidTransactionProof(txHash, ethereumAddress, txInfo.amount);
+      } else {
+        console.error(`Signature verification failed for transaction ${txHash}`);
+      }
+    } catch (error) {
+      console.error('Error handling TransactionProofSubmitted event:', error);
+    }
+  }
+
+  private async processValidTransactionProof(txHash: string, ethereumAddress: string, amount: number): Promise<void> {
+    try {
+      const contract = this.sapphireConnection!.getContract();
+      const mintTx = await contract.mint(
+        ethereumAddress,
+        amount,
+        txHash
+      );
+      console.log(`[Oracle] Mint transaction sent: ${mintTx.hash}`);
+      await mintTx.wait();
+      console.log(`[Oracle] Mint confirmed: ${mintTx.hash}`);
+    } catch (mintError) {
+      console.error('Error sending mint transaction:', mintError);
+    }
+  }
+
+  private async handleBurnGenerateTransaction(burnId: string): Promise<void> {
+    console.log(`[Oracle] Received BurnGenerateTransaction: ${burnId}`);
     
-    // Return the RPC URLs for the network
-    return rpcUrls[network] || rpcUrls['sapphire-localnet'];
+    try {
+      const contract = this.sapphireConnection!.getContract();
+      const burnInfo = await contract.burnData(burnId);
+      console.log(`[Oracle] Burn details - ID: ${burnId}, User: ${burnInfo.user}, Amount: ${burnInfo.amount}`);
+
+      if (burnInfo.status == 1) {
+        await this.processBurnGeneration(burnId, burnInfo);
+      } else {
+        console.log(`[Oracle] Skipping burn: ${burnId}`);
+      }
+    } catch (error) {
+      console.error('Error handling BurnGenerateTransaction event:', error);
+    }
+  }
+
+  private async processBurnGeneration(burnId: string, burnInfo: any): Promise<void> {
+    try {
+      if (!this.bitcoinConnection) {
+        throw new Error('Bitcoin connection not initialized');
+      }
+
+      const contract = this.sapphireConnection!.getContract();
+      const { rawTxHex, txHash } = await this.bitcoinConnection.generateAndSignTransaction(
+        burnInfo.bitcoinAddress,
+        burnInfo.amount,
+        this.sapphireConnection!
+      );
+
+      console.log(`[Oracle] Generated Bitcoin transaction: ${rawTxHex}`);
+      const rawTx = ethers.toUtf8Bytes(rawTxHex);
+
+      const updateTx = await contract.burnSigned(burnId, rawTx, `0x${txHash}`);
+      await updateTx.wait();
+
+      await this.bitcoinConnection.sendRawTransaction(rawTxHex);
+      console.log(`[Oracle] Bitcoin transaction sent: ${txHash}`);
+      console.log(`[Oracle] Burn status updated: ${burnId}`);
+    } catch (error) {
+      console.error('Error updating burn status:', error);
+    }
+  }
+
+  private async handleBurnValidateTransaction(burnId: string): Promise<void> {
+    console.log(`[Oracle] Received BurnValidateTransaction: ${burnId}`);
+  
+    try {
+      const contract = this.sapphireConnection!.getContract();
+      const burnInfo = await contract.burnData(burnId);
+      if (burnInfo.status == 2) {
+        await this.validateBurnTransaction(burnId, burnInfo);
+      }
+    } catch (error) {
+      console.error('Error handling BurnValidateTransaction event:', error);
+    }
+  }
+
+  private async validateBurnTransaction(burnId: string, burnInfo: any): Promise<void> {
+    const txHash = burnInfo.transactionHash.slice(2);
+
+    if (!this.bitcoinConnection) {
+      throw new Error('Bitcoin connection not initialized');
+    }
+
+    console.log(`[Oracle] Fetching Bitcoin transaction: ${txHash}`);
+    const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash);
+    console.log(`Bitcoin transaction info:`, txInfo);
+
+    if (txInfo.confirmations >= 6) {
+      console.log(`[Oracle] Transaction ${txHash} has ${txInfo.confirmations} confirmations`);
+      const contract = this.sapphireConnection!.getContract();
+      const updateTx = await contract.validateBurn(burnId);
+      await updateTx.wait();
+      console.log(`[Oracle] Burn validated: ${burnId}`);
+    } else {
+      console.log(`[Oracle] Waiting for more confirmations: ${txHash} (${txInfo.confirmations})`);
+    }
   }
 
   /**
    * Stop the oracle
    */
   stop(): void {
-    console.log('Stopping Trustless Bridge ROFL Oracle...');
+    console.log('[Oracle] Service stopping...');
     
     // Remove event listeners
     if (this.sapphireConnection) {
@@ -336,7 +309,7 @@ export class TrustlessBridgeOracle {
       // Remove all event listeners
       Object.keys(this.eventListeners).forEach(eventName => {
         contract.off(eventName, this.eventListeners[eventName]);
-        console.log(`Removed event listener for ${eventName}`);
+        console.log(`[Oracle] Removed event listener: ${eventName}`);
       });
     }
     
