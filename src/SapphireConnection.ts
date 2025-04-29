@@ -1,5 +1,5 @@
 import { JsonRpcProvider, Contract, BaseContractMethod, Wallet } from 'ethers';
-import { wrapEthersProvider } from '@oasisprotocol/sapphire-ethers-v6';
+import { wrapEthersProvider, wrapEthersSigner } from '@oasisprotocol/sapphire-ethers-v6';
 
 /**
  * Class for managing connections to the Oasis Sapphire network
@@ -14,6 +14,7 @@ export class SapphireConnection {
   private readonly MAX_RECONNECT_ATTEMPTS = 3;
   private readonly RECONNECT_DELAY_MS = 1000;
   private wallet: Wallet | null = null;
+  private wrappedWallet: any | null = null;
   private contract: Contract | null = null;
 
   /**
@@ -44,6 +45,18 @@ export class SapphireConnection {
       throw new Error('Wallet not initialized. Call connect() first.');
     }
     return this.wallet;
+  }
+
+
+  /**
+   * Get the connected wallet
+   * @returns The wallet instance
+   */
+  getWrappedWallet(): any {
+    if (!this.wrappedWallet) {
+      throw new Error('Wallet not initialized. Call connect() first.');
+    }
+    return this.wrappedWallet;
   }
 
   /**
@@ -110,7 +123,12 @@ export class SapphireConnection {
       throw new Error('Provider not initialized. Call connect() first.');
     }
     
-    this.wallet = new Wallet(privateKey, this.wrappedProvider);
+    // Create wallet and connect it to the provider
+    this.wallet = new Wallet(privateKey).connect(this.provider);
+    
+    // Wrap the wallet with Sapphire privacy
+    this.wrappedWallet = wrapEthersSigner(this.wallet);
+    
     console.log('Wallet initialized with private key');
   }
 
@@ -120,14 +138,44 @@ export class SapphireConnection {
    * @param contractAbi - ABI of the contract
    */
   connectToContract(contractAddress: string, contractAbi: any): void {
-    if (!this.wrappedProvider) {
-      throw new Error('Provider not initialized. Call connect() first.');
-    }
-    if (!this.wallet) {
+    if (!this.wrappedWallet) {
       throw new Error('Wallet not initialized. Call initializeWallet() first.');
     }
     
-    this.contract = this.getContractWithErrorHandling(contractAddress, contractAbi);
+    // Create contract with wrapped signer
+    this.contract = new Contract(contractAddress, contractAbi, this.wrappedWallet);
+    
+    // Add error handling for network-related calls
+    const originalSend = (this.contract as any).send;
+    (this.contract as any).send = async (...args: any[]) => {
+      try {
+        return await originalSend.apply(this.contract, args);
+      } catch (error: unknown) {
+        const err = error as Error;
+        // Check if it's an RPC error
+        if (err.message && (
+            err.message.includes('network') || 
+            err.message.includes('timeout') || 
+            err.message.includes('connection') ||
+            err.message.includes('failed') ||
+            err.message.includes('error')
+          )) {
+          await this.handleRpcError(err);
+          // Retry the call after reconnection
+          return await originalSend.apply(this.contract, args);
+        }
+        throw error;
+      }
+    };
+    
+    // Create a direct contract instance for view functions
+    const directContract = new Contract(contractAddress, contractAbi, this.provider);
+    
+    // Override specific view functions to use the direct contract
+    (this.contract as any).publicKey = async () => {
+      return await (directContract as any).publicKey();
+    };
+    
     console.log(`Connected to contract at ${contractAddress}`);
   }
 
@@ -184,49 +232,5 @@ export class SapphireConnection {
     } finally {
       this.isReconnecting = false;
     }
-  }
-
-  /**
-   * Get the contract instance with automatic reconnection on failure
-   * @param address - Contract address
-   * @param abi - Contract ABI
-   * @returns The contract instance
-   */
-  private getContractWithErrorHandling(address: string, abi: any): Contract {
-    if (!this.wrappedProvider) {
-      throw new Error('Provider not initialized. Call connect() first.');
-    }
-    if (!this.wallet) {
-      throw new Error('Wallet not initialized. Call initializeWallet() first.');
-    }
-    
-    const contract = new Contract(address, abi, this.wallet);
-    
-    // Add error handling to the contract
-    const originalCall = contract.call as unknown as BaseContractMethod<any[], any, any>;
-    
-    // Override the call method to add error handling
-    (contract as any).call = async (...args: any[]) => {
-      try {
-        return await originalCall.apply(contract, args);
-      } catch (error: unknown) {
-        const err = error as Error;
-        // Check if it's an RPC error
-        if (err.message && (
-            err.message.includes('network') || 
-            err.message.includes('timeout') || 
-            err.message.includes('connection') ||
-            err.message.includes('failed') ||
-            err.message.includes('error')
-          )) {
-          await this.handleRpcError(err);
-          // Retry the call after reconnection
-          return await originalCall.apply(contract, args);
-        }
-        throw error;
-      }
-    };
-    
-    return contract;
   }
 } 

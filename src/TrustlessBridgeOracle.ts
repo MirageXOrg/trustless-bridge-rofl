@@ -3,7 +3,7 @@ import { SapphireConnection } from './SapphireConnection';
 import { BitcoinConnection, BitcoinTransactionInfo } from './BitcoinConnection';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Contract } from 'ethers';
+import { Contract, ethers } from 'ethers';
 
 /**
  * Class representing the Trustless Bridge ROFL Oracle
@@ -60,11 +60,15 @@ export class TrustlessBridgeOracle {
       await this.initializeSapphireConnection();
 
       const bitcoinAddress = await this.sapphireConnection?.getContract().bitcoinAddress();
-      
+      const oracleAddress = await this.sapphireConnection?.getContract().oracle();
+
       // Initialize Bitcoin connection
       this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork, bitcoinAddress);
+
+      console.log(await this.bitcoinConnection.getNetworkFeeRate());
       
       console.log(`Connected to contract ${this.contractAddress}, monitoring ${bitcoinAddress}`);
+      console.log(`Using Oracle ${oracleAddress}`);
       console.log(`Using Bitcoin ${this.bitcoinNetwork} network`);
       console.log('Oracle is running and listening for events...');
 
@@ -172,15 +176,53 @@ export class TrustlessBridgeOracle {
     
     // Listen for BurnGenerateTransaction events
     this.eventListeners.burnGenerateTransaction = contract.on('BurnGenerateTransaction', 
-      async (transactionId, amount, recipient, sender, event) => {
-        console.log(`BurnGenerateTransaction event received: ${transactionId}`);
-        console.log(`Amount: ${amount}`);
-        console.log(`Recipient: ${recipient}`);
-        console.log(`Sender: ${sender}`);
+      async (burnId, event) => {
+        console.log(`BurnGenerateTransaction event received for burnId: ${burnId}`);
         
         try {
-          // Handle the event here
-          console.log(`Processing BurnGenerateTransaction for transaction ${transactionId}`);
+          // Fetch burn data from the contract
+          const burnInfo = await contract.burnData(burnId);
+          console.log('Burn Information:');
+          console.log(`User: ${burnInfo.user}`);
+          console.log(`Amount: ${burnInfo.amount}`);
+          console.log(`Timestamp: ${burnInfo.timestamp}`);
+          console.log(`Bitcoin Address: ${burnInfo.bitcoinAddress}`);
+          console.log(`Status: ${burnInfo.status}`);
+          console.log(`Transaction Hash: ${burnInfo.transactionHash}`);
+
+          if (burnInfo.status == 1) {
+            try {
+              if (!this.bitcoinConnection) {
+                throw new Error('Bitcoin connection not initialized');
+              }
+
+              // Generate and sign the Bitcoin transaction
+              const { rawTxHex, txHash } = await this.bitcoinConnection.generateAndSignTransaction(
+                burnInfo.bitcoinAddress,
+                burnInfo.amount,
+                this.sapphireConnection!
+              );
+
+              console.log(`Raw transaction hex: ${rawTxHex}`);
+              const rawTx = ethers.toUtf8Bytes(rawTxHex);
+
+
+              const updateTx = await contract.burnSigned(burnId, rawTx, `0x${txHash}`);
+              await updateTx.wait();
+
+              // Send the transaction to the Bitcoin network
+              await this.bitcoinConnection.sendRawTransaction(rawTxHex);
+              console.log(`Bitcoin transaction sent: ${txHash}`);
+
+              
+              console.log(`Burn status updated for burnId: ${burnId}`);
+            } catch (error) {
+              console.error('Error updating burn status:', error);
+            }
+          } else {
+            console.log(`Burn skipped for burnId: ${burnId}`);
+          }
+          
         } catch (error) {
           console.error('Error handling BurnGenerateTransaction event:', error);
         }
@@ -189,14 +231,34 @@ export class TrustlessBridgeOracle {
     
     // Listen for BurnValidateTransaction events
     this.eventListeners.burnValidateTransaction = contract.on('BurnValidateTransaction', 
-      async (transactionId, txHash, sender, event) => {
-        console.log(`BurnValidateTransaction event received: ${transactionId}`);
-        console.log(`Transaction Hash: ${txHash}`);
-        console.log(`Sender: ${sender}`);
-        
+      async (burnId, event) => {
+        console.log(`BurnValidateTransaction event received for burnId: ${burnId}`);
+      
         try {
-          // Handle the event here
-          console.log(`Processing BurnValidateTransaction for transaction ${transactionId}`);
+          const burnInfo = await contract.burnData(burnId);
+          if (burnInfo.status == 2) {
+          const txHash = burnInfo.transactionHash.slice(2);
+
+          // Check if Bitcoin connection is initialized
+          if (!this.bitcoinConnection) {
+            throw new Error('Bitcoin connection not initialized');
+          }
+
+          // Fetch Bitcoin transaction information
+          console.log(`Fetching Bitcoin transaction info for ${txHash}...`);
+          const txInfo = await this.bitcoinConnection.fetchTransactionInfo(txHash);
+          console.log(`Bitcoin transaction info:`, txInfo);
+
+          // Check if transaction has 6 or more confirmations
+          if (txInfo.confirmations >= 6) {
+            console.log(`Transaction ${txHash} has ${txInfo.confirmations} confirmations, validating burn...`);
+            const updateTx = await contract.validateBurn(burnId);
+            await updateTx.wait();
+            console.log(`Burn validated for burnId: ${burnId}`);
+          } else {
+            console.log(`Transaction ${txHash} has only ${txInfo.confirmations} confirmations, waiting for more confirmations...`);
+            }
+          }
         } catch (error) {
           console.error('Error handling BurnValidateTransaction event:', error);
         }

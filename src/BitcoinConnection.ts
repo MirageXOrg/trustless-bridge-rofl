@@ -1,8 +1,12 @@
 import Client = require('bitcoin-core');
 import * as bitcoin from 'bitcoinjs-lib';
-import ECPair from 'ecpair';
 import * as bitcoinMessage from 'bitcoinjs-message';
-import * as bs58 from 'bs58';
+import { BN } from 'bn.js';
+import * as bip66 from 'bip66';
+import axios from 'axios';
+import { Contract, ethers } from 'ethers';
+import {SiweMessage} from 'siwe';
+import { SapphireConnection } from './SapphireConnection';
 
 /**
  * Interface for Bitcoin RPC node configuration
@@ -14,6 +18,7 @@ export interface BitcoinRpcNode {
   name: string; // Optional name for the node (e.g., "My Node", "BlockCypher", etc.)
   timeout?: number; // Optional timeout in milliseconds
   ssl?: boolean; // Whether to use SSL for the connection
+  wallet?: string; // Optional wallet name for Bitcoin Core RPC
 }
 
 /**
@@ -28,6 +33,24 @@ export interface BitcoinTransactionInfo {
   provider: string;
   timestamp?: number; // Optional timestamp of the transaction
   blockHeight?: number; // Optional block height
+}
+
+interface BlockstreamUtxo {
+  txid: string;
+  vout: number;
+  value: number;
+  scriptPubKey: string;
+  status?: {
+    block_height: number;
+  };
+}
+
+interface TransformedUtxo {
+  txid: string;
+  vout: number;
+  amount: number;
+  scriptPubKey: string;
+  confirmations: number;
 }
 
 /**
@@ -63,11 +86,11 @@ export class BitcoinConnection {
     if (rpcNodes.length === 0) {
       this.rpcNodes = [
         {
-          url: 'https://bitcoin-testnet-rpc.publicnode.com/',
-          //url: 'https://bitcoin-rpc.publicnode.com/',
+          url: 'https://bitcoin-testnet-rpc.publicnode.com',
           username: '',
           password: '',
-          name: 'local-node'
+          name: 'public-node',
+          ssl: true
         }
       ];
     } else {
@@ -90,6 +113,11 @@ export class BitcoinConnection {
           password: node.password,
           timeout: node.timeout || 30000,
         };
+        
+        // Add wallet path if specified
+        if (node.wallet) {
+          clientConfig.wallet = node.wallet;
+        }
         
         // Add ssl property if needed
         if (node.ssl || node.url.startsWith('https')) {
@@ -449,5 +477,277 @@ export class BitcoinConnection {
     });
     
     return mostCommonResult;
+  }
+
+  /**
+   * Get all UTXOs for the tracked address
+   * @returns Array of UTXOs
+   */
+  async getAllUtxos(): Promise<any[]> {
+    try {
+      // // Use Blockstream API for testnet
+      // const apiUrl = this.bitcoinNetwork === 'testnet' 
+      //   ? 'https://blockstream.info/testnet/api'
+      //   : 'https://blockstream.info/api';
+
+              // Use Blockstream API for testnet
+      const apiUrl = this.bitcoinNetwork === 'testnet' 
+      ? 'https://mempool.space/testnet/api'
+      : 'https://blockstream.info/api';
+      
+      // Fetch UTXOs for the tracked address
+      console.log(`${apiUrl}/address/${this.trackedAddress}/utxo`);
+      const response = await axios.get(`${apiUrl}/address/${this.trackedAddress}/utxo`);
+      if (!response.data || response.data.length === 0) {
+          throw new Error("No UTXOs available");
+      }
+      return response.data;
+    } catch (error) {
+      console.error('Error getting UTXOs:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch raw transaction hex for a given txid
+   * @param txid - Transaction ID
+   * @returns Raw transaction hex
+   */
+  async fetchRawTx(txid: string): Promise<string> {
+    if (this.clients.size === 0) {
+      await this.initializeConnections();
+    }
+
+    const client = Array.from(this.clients.values())[0];
+    const rawTx = await (client as any).getRawTransaction(txid);
+    return rawTx;
+  }
+
+  /**
+   * Get the current network fee rate from the Bitcoin node
+   * @returns Fee rate in satoshis per byte
+   */
+  public async getNetworkFeeRate(): Promise<number> {
+    if (this.clients.size === 0) {
+      await this.initializeConnections();
+    }
+
+    const client = Array.from(this.clients.values())[0];
+    try {
+      // Use command method to make raw RPC call to estimatesmartfee
+      const feeInfo = await (client as any).command('estimatesmartfee', 1);
+      if (feeInfo.feerate) {
+        // Convert BTC/kB to satoshis/byte
+        const feeRate = Math.ceil(feeInfo.feerate * 100000000 / 1000);
+        
+        // For testnet, cap the fee rate at 5 satoshis/byte
+        if (this.bitcoinNetwork === 'testnet') {
+          return Math.min(feeRate, 5)
+        }
+        
+        return feeRate;
+      }
+    } catch (error) {
+      console.error('Error getting network fee rate:', error);
+    }
+    
+    // Fallback to a conservative fee rate if we can't get it from the node
+    return this.bitcoinNetwork === 'testnet' ? 2 : 5; // 2 satoshis per byte for testnet, 5 for mainnet
+  }
+
+  /**
+   * Calculate transaction amounts including fees
+   * @param utxoAmountSat - Total amount of UTXOs in satoshis
+   * @param amountToSendSat - Amount to send in satoshis
+   * @param feeRateSatPerByte - Fee rate in satoshis per byte
+   * @param estimatedTxSizeBytes - Estimated transaction size in bytes
+   * @returns Object containing amount to send, change, and fee
+   */
+  async calculateAmounts(
+    utxoAmountSat: number | bigint,
+    amountToSendSat: number | bigint,
+    numInputs: number,
+    numOutputs: number = 2 // Default to 2 outputs (destination + change)
+  ): Promise<{ amountToSendSat: bigint; change: bigint; fee: bigint }> {
+    // Get current network fee rate
+    const feeRateSatPerByte = await this.getNetworkFeeRate();
+    
+    // Calculate transaction size
+    // Base transaction size: 10 bytes
+    // Input size: ~148 bytes per input (P2PKH)
+    // Output size: ~34 bytes per output
+    const baseTxSize = 10;
+    const inputSize = 148;
+    const outputSize = 34;
+    const estimatedTxSizeBytes = baseTxSize + (inputSize * numInputs) + (outputSize * numOutputs);
+    
+    // Add 20% safety margin to ensure we have enough fee
+    const feeWithMargin = Math.ceil(estimatedTxSizeBytes * feeRateSatPerByte * 1.2);
+    
+    // Convert all values to BigInt for consistent calculations
+    const utxoAmount = BigInt(utxoAmountSat);
+    const amountToSend = BigInt(amountToSendSat);
+    const fee = BigInt(feeWithMargin);
+    
+    const change = utxoAmount - amountToSend - fee;
+    if (change < 0n) {
+      throw new Error("Not enough funds to cover destination + fee.");
+    }
+    return { 
+      amountToSendSat: amountToSend, 
+      change, 
+      fee 
+    };
+  }
+
+  async siweLogin(sapphireConnection: SapphireConnection): Promise<any> {
+    const contract = sapphireConnection.getContract();
+    const wallet = sapphireConnection.getWrappedWallet();
+    const domain = await contract.domain();
+
+    const siweMsg = new SiweMessage({
+        domain,
+        address: wallet.address,
+        statement: "Sign in with Ethereum to access the TrustlessBTC contract",
+        uri: `http://${domain}`,
+        version: "1",
+        chainId: Number((await contract.runner?.provider?.getNetwork())?.chainId)
+    }).toMessage();
+
+    const signature = await wallet.signMessage(siweMsg);
+    const sig = ethers.Signature.from(signature);
+    const token = await contract.login(siweMsg, sig);
+
+    return token;
+  }
+
+  /**
+   * Generate and sign a Bitcoin transaction
+   * @param destinationAddress - Destination Bitcoin address
+   * @param amountSat - Amount to send in satoshis
+   * @param contract - Smart contract instance for signing
+   * @returns Object containing raw transaction hex and transaction hash
+   */
+  async generateAndSignTransaction(
+    destinationAddress: string,
+    amountSat: number | bigint,
+    sapphireConnection: SapphireConnection
+  ): Promise<{ rawTxHex: string; txHash: string }> {
+    const network = this.network;
+    const psbt = new bitcoin.Psbt({ network });
+
+    // Get UTXOs
+    const utxos = await this.getAllUtxos();
+    if (utxos.length === 0) {
+      throw new Error("No UTXOs available");
+    }
+
+    // Calculate total balance
+    const totalBalance = utxos.reduce((sum, utxo) => sum + BigInt(utxo.value), 0n);
+
+    console.log(`Total balance: ${totalBalance} satoshis`);
+    console.log("UTXOs:", utxos);
+    
+    // Calculate amounts including fees
+    const { amountToSendSat, change, fee } = await this.calculateAmounts(
+      totalBalance,
+      amountSat,
+      utxos.length
+    );
+
+    // Add inputs
+    for (const utxo of utxos) {
+      const rawTxHex = await this.fetchRawTx(utxo.txid);
+      psbt.addInput({
+        hash: utxo.txid,
+        index: utxo.vout,
+        nonWitnessUtxo: Buffer.from(rawTxHex, 'hex'),
+      });
+    }
+
+    // Add outputs
+    psbt.addOutput({
+      address: destinationAddress,
+      value: Number(amountToSendSat),
+    });
+    psbt.addOutput({
+      address: this.trackedAddress,
+      value: Number(change),
+    });
+
+    const token = await this.siweLogin(sapphireConnection);
+    const contract = sapphireConnection.getContract();
+    // Get public key from contract
+    const pubKeyHex = await contract.publicKey();
+    const pubKeyBuffer = Buffer.from(pubKeyHex.startsWith('0x') ? pubKeyHex.slice(2) : pubKeyHex, 'hex');
+    // Sign each input
+    for (let i = 0; i < utxos.length; i++) {
+      const tx = (psbt as any).__CACHE.__TX;
+      const sighashType = bitcoin.Transaction.SIGHASH_ALL;
+      const utxoScript = bitcoin.address.toOutputScript(this.trackedAddress, network);
+      const sighash = tx.hashForSignature(i, utxoScript, sighashType);
+
+      // Call contract to sign the sighash
+      const sighashHex = '0x' + sighash.toString('hex');
+      const { nonce, r, s, v } = await contract.sign(sighashHex, token);
+
+      // Convert r, s to Buffer
+      let rBuf = Buffer.from(r.toString(16).padStart(64, '0'), 'hex');
+      let sBuf = Buffer.from(s.toString(16).padStart(64, '0'), 'hex');
+      rBuf = this.toPositiveBuffer(rBuf);
+      sBuf = this.toPositiveBuffer(sBuf);
+      
+      const derSig = Buffer.concat([
+        this.encodeDerSignature(new BN(rBuf), new BN(sBuf)),
+        Buffer.from([sighashType])
+      ]);
+
+      psbt.updateInput(i, {
+        partialSig: [{
+          pubkey: pubKeyBuffer,
+          signature: derSig
+        }]
+      });
+      psbt.finalizeInput(i);
+    }
+
+    const rawTxHex = psbt.extractTransaction().toHex();
+    const txHash = bitcoin.Transaction.fromHex(rawTxHex).getId();
+
+    return { rawTxHex, txHash };
+  }
+
+  /**
+   * Send a raw transaction to the Bitcoin network
+   * @param rawTxHex - Raw transaction hex
+   * @returns Transaction ID
+   */
+  async sendRawTransaction(rawTxHex: string): Promise<string> {
+    if (this.clients.size === 0) {
+      await this.initializeConnections();
+    }
+
+    const client = Array.from(this.clients.values())[0];
+    const txid = await (client as any).sendRawTransaction(rawTxHex);
+    return txid;
+  }
+
+  /**
+   * Helper function to encode DER signature
+   */
+  private encodeDerSignature(r: any, s: any): Buffer {
+    const rBuf = this.toPositiveBuffer(r.toArrayLike(Buffer, 'be'));
+    const sBuf = this.toPositiveBuffer(s.toArrayLike(Buffer, 'be'));
+    return Buffer.from(bip66.encode(rBuf, sBuf));
+  }
+
+  /**
+   * Helper function to ensure buffer is positive
+   */
+  private toPositiveBuffer(buf: Buffer): Buffer {
+    if (buf[0] & 0x80) {
+      return Buffer.concat([Buffer.from([0x00]), buf]);
+    }
+    return buf;
   }
 } 
