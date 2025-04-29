@@ -48,6 +48,37 @@ export class TrustlessBridgeOracle {
     }
   }
 
+  async setOracle(): Promise<void> {
+    const oracleAddress = await this.sapphireConnection?.getContract().oracle();
+    const walletAddress = this.sapphireConnection?.getWallet().address;
+
+    if (oracleAddress != walletAddress) { 
+      console.log(`Contract oracle ${oracleAddress} does not match our address ${walletAddress}, updating...`);
+      
+      try {
+        const contract = this.sapphireConnection!.getContract();
+        const tx = await contract.setOracle.populateTransaction(walletAddress);
+        
+        const txParams = {
+          gas: tx.gasLimit?.toString() || '100000',
+          to: this.contractAddress,
+          value: '0',
+          data: tx.data || '0x'
+        };
+        
+        const txHash = await this.roflUtility.submitTx(txParams);
+        console.log(`Transaction sent: ${txHash}`);
+        
+        const receipt = await this.sapphireConnection!.getProvider().waitForTransaction(txHash);
+        console.log(`Updated. Transaction hash: ${receipt.transactionHash}`);
+      } catch (error) {
+        console.error('Error updating oracle:', error);
+        throw error;
+      }
+    }
+    console.log(`Using Oracle ${oracleAddress}`);
+  }
+
   /**
    * Run the oracle
    */
@@ -58,17 +89,14 @@ export class TrustlessBridgeOracle {
     try {
       // Initialize Sapphire connection
       await this.initializeSapphireConnection();
+      await this.setOracle();
 
       const bitcoinAddress = await this.sapphireConnection?.getContract().bitcoinAddress();
-      const oracleAddress = await this.sapphireConnection?.getContract().oracle();
 
       // Initialize Bitcoin connection
       this.bitcoinConnection = new BitcoinConnection(this.bitcoinNetwork, bitcoinAddress);
-
-      console.log(await this.bitcoinConnection.getNetworkFeeRate());
       
       console.log(`Connected to contract ${this.contractAddress}, monitoring ${bitcoinAddress}`);
-      console.log(`Using Oracle ${oracleAddress}`);
       console.log(`Using Bitcoin ${this.bitcoinNetwork} network`);
       console.log('Oracle is running and listening for events...');
 
