@@ -10,7 +10,7 @@ services:
     environment:
       - NODE_ENV=production
     # Example command with required arguments
-    command: ["--contract-address", "0x1234567890123456789012345678901234567890", "--network", "sapphire-localnet", "--bitcoin-network", "testnet"]
+    command: ["--contract-address", "0x8C7352cF35435Ebe69D6C3B636A0E65F9C5Bc6A9", "--network", "testnet", "--bitcoin-network", "testnet"]
     # Remove the volumes to ensure the container uses the built files
     # volumes:
     #   - ./src:/app/src
