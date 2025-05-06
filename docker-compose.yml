@@ -2,9 +2,8 @@ version: '3.8'
 
 services:
   oracle:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: "ghcr.io/momannn/trustless-bridge-oracle:latest"
+    platform: linux/amd64
     container_name: trustless-bridge-oracle
     restart: unless-stopped
     environment:
