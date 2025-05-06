@@ -124,3 +124,6 @@ dist
 # Bitcoin specific
 *.dat
 wallet.dat 
+
+## rofl
+*.orc

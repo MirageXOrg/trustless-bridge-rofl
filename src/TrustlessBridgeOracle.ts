@@ -1,10 +1,8 @@
 import { RoflUtility } from './RoflUtility';
 import { SapphireConnection } from './SapphireConnection';
 import { BitcoinConnection } from './BitcoinConnection';
-import * as fs from 'fs';
-import * as path from 'path';
 import { ethers } from 'ethers';
-import { getSapphireRpcUrls } from './config';
+import { getSapphireRpcUrls, TRUSTLESS_BTC_ABI } from './config';
 
 /**
  * Class representing the Trustless Bridge ROFL Oracle
@@ -18,7 +16,6 @@ export class TrustlessBridgeOracle {
   private poolInterval: number = 20000; // 20 seconds
   private sapphireConnection: SapphireConnection | null = null;
   private bitcoinConnection: BitcoinConnection | null = null;
-  private contractAbi: any;
   private eventListeners: { [key: string]: any } = {};
 
   /**
@@ -38,15 +35,6 @@ export class TrustlessBridgeOracle {
     this.bitcoinNetwork = bitcoinNetwork;
     this.roflUtility = roflUtility;
     this.secret = secret;
-    
-    // Load the contract ABI
-    try {
-      const abiPath = path.resolve(__dirname, 'abi', 'TrustlessBTC.json');
-      this.contractAbi = (JSON.parse(fs.readFileSync(abiPath, 'utf8'))).abi;
-    } catch (error) {
-      console.error('Failed to load contract ABI:', error);
-      this.contractAbi = [];
-    }
   }
 
   async setOracle(): Promise<void> {
@@ -134,7 +122,7 @@ export class TrustlessBridgeOracle {
     this.sapphireConnection.initializeWallet(this.secret);
     
     // Connect to the contract
-    this.sapphireConnection.connectToContract(this.contractAddress, this.contractAbi);
+    this.sapphireConnection.connectToContract(this.contractAddress, TRUSTLESS_BTC_ABI);
 
     console.log('[Oracle] Event listeners initialized');
   }
