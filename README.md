@@ -67,6 +67,8 @@ TODO: Add description and diagrams
 
 To deploy this application as a ROFL app on Oasis Network:
 
+More info in official documentation: https://docs.oasis.io/build/rofl/deployment/
+
 1. Pull the ROFL development Docker image:
    ```bash
    docker pull --platform linux/amd64 ghcr.io/oasisprotocol/rofl-dev:main
@@ -96,9 +98,18 @@ To deploy this application as a ROFL app on Oasis Network:
    ```
 
 6. Deploy the ROFL app:
+
+   Either this:
+
    ```bash
    docker run --platform linux/amd64 --volume $(pwd):/src --volume $(pwd)/.oasis-cli:/root/.oasis-cli -it --env-file .env ghcr.io/oasisprotocol/rofl-dev:main sh -c 'oasis wallet import 0 --secret $ORACLE_SECRET --algorithm secp256k1-raw -y && oasis rofl deploy --account 0 --network testnet'
+
+   oasis rofl deploy --provider 
    ```
+
+   if you have your own playground no need for calling deploy 
+
+
 
 7. Choose a deployment option:
    - **Option A: Run Your Own Oasis Node**
@@ -117,6 +128,24 @@ To deploy this application as a ROFL app on Oasis Network:
      2. Contact the Oasis team on [Discord](https://oasis.io/discord) #dev-central channel
 
 Note: ROFL apps require Intel TDX (Trust Domain Extensions) support to run. If you're developing on a non-Intel machine (like Apple Silicon), you'll need to use Option B for deployment.
+
+### Funding ROFL
+
+If on the node run:
+
+```
+oasis-node identity show-address -a unix:/node/data/internal.sock
+```
+
+To transfer to sapphire address run:
+
+```
+oasis account transfer 10 address \
+  --network testnet --paratime sapphire
+``` 
+
+
+### 
 
 ## Configuration
 
@@ -228,3 +257,8 @@ The implementation is based on the Python version from the [demo-rofl-chatbot](h
 - `Dockerfile` - Docker configuration
 - `docker-compose.yml` - Docker Compose configuration
 - `build.sh` - Script to build and run the Docker container
+
+# Get testnet bitcoin
+
+https://gist.github.com/b3h3rkz/030fa553cf2bc3f1ab09c178df5981e6
+
