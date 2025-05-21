@@ -237,7 +237,7 @@ export class TrustlessBridgeOracle {
       console.log(`[Oracle] Generated Bitcoin transaction: ${rawTxHex}`);
       const rawTx = ethers.toUtf8Bytes(rawTxHex);
 
-      const updateTx = await contract.burnSigned(burnId, rawTx, `0x${txHash}`);
+      const updateTx = await contract.signBurn(burnId, rawTx, `0x${txHash}`);
       await updateTx.wait();
 
       await this.bitcoinConnection.sendRawTransaction(rawTxHex);

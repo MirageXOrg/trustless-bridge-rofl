@@ -273,7 +273,6 @@ export class BitcoinActions {
 
     for (const config of apiConfigs) {
       try {
-        console.log(`[Bitcoin] Fetching transaction info from: ${config.name}`);
         const response = await axios.get(`${config.url}/tx/${txHash}`, {
           timeout: config.timeout
         });
@@ -283,19 +282,27 @@ export class BitcoinActions {
         }
 
         const tx = response.data;
+        
         let totalAmount = 0;
         let isTrackedAddressReceiver = false;
         const senders: string[] = [];
 
         // Process outputs
         for (const output of tx.vout) {
-          if (output.scriptPubKey && output.scriptPubKey.address === this.trackedAddress) {
-            totalAmount += Math.round(output.value * 100000000); // Convert BTC to satoshis
+          if ((output.scriptPubKey && output.scriptPubKey.address === this.trackedAddress) || (output.scriptpubkey_address && output.scriptpubkey_address === this.trackedAddress)) {
+            // Check if value is in BTC (decimal) or satoshis (whole number)
+            const value = output.value;
+            if (Number.isInteger(value)) {
+              // Value is already in satoshis
+              totalAmount += value;
+            } else {
+              // Value is in BTC, convert to satoshis
+              totalAmount += Math.round(value * 100000000);
+            }
             isTrackedAddressReceiver = true;
           }
         }
 
-        // Process inputs
         for (const input of tx.vin) {
           if (input.prevout && input.prevout.scriptpubkey_address) {
             const sender = input.prevout.scriptpubkey_address;
@@ -305,7 +312,6 @@ export class BitcoinActions {
           }
         }
 
-        console.log(`[Bitcoin] Transaction info fetched from: ${config.name}`);
         return {
           txHash,
           amount: isTrackedAddressReceiver ? totalAmount : 0,
