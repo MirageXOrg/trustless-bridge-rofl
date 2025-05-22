@@ -14,7 +14,7 @@ services:
     environment:
       - NODE_ENV=production
     # Example command with required arguments
-    command: ["--contract-address", "0xCC36DA877326b7211b6b679546D7ee9c41d23636", "--network", "testnet", "--bitcoin-network", "testnet"]
+    command: ["--contract-address", "0xD58A092161F630A9D8394BB11a22DEb55Bf60f3F", "--network", "testnet", "--bitcoin-network", "testnet"]
     #command: ["--contract-address", "0x6f35D4E9d3Ac201aE6fF8997c2f7a73E64da5d30", "--network", "testnet", "--bitcoin-network", "testnet", "--secret", ""]
     # Remove the volumes to ensure the container uses the built files
     # volumes:
