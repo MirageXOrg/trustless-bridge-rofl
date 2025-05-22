@@ -56,7 +56,6 @@ export class TrustlessBridgeOracle {
         };
         
         const txHash = await this.roflUtility.submitTx(txParams);
-        console.log(`[Oracle] Update transaction sent: ${txHash}`);
         
         const receipt = await this.sapphireConnection!.getProvider().waitForTransaction(txHash);
         console.log(`[Oracle] Update confirmed: ${receipt.transactionHash}`);

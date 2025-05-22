@@ -1,99 +1,82 @@
-import { TxParams } from './types';
+import axios, { AxiosInstance } from 'axios';
 
-/**
- * Utility class for interacting with ROFL services
- */
+export interface TxParams {
+  gas: string;
+  to: string;
+  value: string;
+  data: string;
+}
+
 export class RoflUtility {
-  private readonly ROFL_SOCKET_PATH = '/run/rofl-appd.sock';
+  private static readonly ROFL_SOCKET_PATH = '/run/rofl-appd.sock';
   private url: string;
+  private client: AxiosInstance;
 
-  /**
-   * Constructor for RoflUtility
-   * @param url - URL for the KMS service
-   */
   constructor(url: string = '') {
     this.url = url;
-    
+
     if (this.url && !this.url.startsWith('http')) {
-      console.log(`[Rofl] Using HTTP socket: ${this.url}`);
-    } else if (!this.url) {
-      console.log(`[Rofl] Using unix domain socket: ${this.ROFL_SOCKET_PATH}`);
-    } else {
-      console.log(`[Rofl] Using HTTP URL: ${this.url}`);
-    }
-  }
-
-  /**
-   * Make a POST request to the appd service
-   * @param path - API path
-   * @param payload - Request payload
-   * @returns Response data
-   */
-  private async appdPost(path: string, payload: any): Promise<any> {
-    const baseUrl = this.url && this.url.startsWith('http') ? this.url : 'http://localhost';
-    const fullUrl = `${baseUrl}${path}`;
-    
-    console.log(`[Rofl] Sending request to: ${fullUrl}`);
-    
-    try {
-      // In a real implementation, we would need to handle Unix domain sockets
-      // For now, we'll just use HTTP
-      const response = await fetch(fullUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
+      // UDS passed explicitly
+      this.client = axios.create({
+        baseURL: 'http://localhost',
+        socketPath: this.url,
       });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error making POST request:', error);
-      throw error;
+      console.log(`Using HTTP socket: ${this.url}`);
+    } else if (!this.url) {
+      // Use default UDS
+      this.client = axios.create({
+        baseURL: 'http://localhost',
+        socketPath: RoflUtility.ROFL_SOCKET_PATH,
+      });
+      console.log(`Using unix domain socket: ${RoflUtility.ROFL_SOCKET_PATH}`);
+    } else {
+      // Use HTTP URL
+      this.client = axios.create({
+        baseURL: this.url,
+      });
     }
   }
 
-  /**
-   * Fetch a key from the KMS service
-   * @param keyId - ID of the key to fetch
-   * @returns The secret key
-   */
-  async fetchKey(keyId: string): Promise<string> {
+  private async _appdPost(path: string, payload: any): Promise<any> {
+    const url = this.url && this.url.startsWith('http') ? this.url : 'http://localhost';
+    console.log(`Posting ${JSON.stringify(payload)} to ${url + path}`);
+
+    try {
+      const response = await this.client.post(path, payload, { timeout: 0 });
+      return response.data;
+    } catch (err: any) {
+      console.error('Error in _appdPost:', err.response?.data || err.message);
+      throw err;
+    }
+  }
+
+  async fetchKey(id: string): Promise<string> {
     const payload = {
-      key_id: keyId,
-      kind: 'secp256k1'
+      key_id: id,
+      kind: 'secp256k1',
     };
-    
+
     const path = '/rofl/v1/keys/generate';
-    const response = await this.appdPost(path, payload);
-    
+    const response = await this._appdPost(path, payload);
     return response.key;
   }
 
-  /**
-   * Submit a transaction to the blockchain
-   * @param tx - Transaction parameters
-   * @returns Transaction hash
-   */
   async submitTx(tx: TxParams): Promise<string> {
     const payload = {
       tx: {
         kind: 'eth',
         data: {
-          gas_limit: tx.gas,
-          to: tx.to.startsWith('0x') ? tx.to.substring(2) : tx.to,
-          value: tx.value,
-          data: tx.data.startsWith('0x') ? tx.data.substring(2) : tx.data,
+          gas_limit: Number(tx.gas),
+          to: tx.to.replace(/^0x/, ''),
+          value: Number(tx.value),
+          data: tx.data.replace(/^0x/, ''),
         },
       },
       encrypted: false,
     };
-    
+
     const path = '/rofl/v1/tx/sign-submit';
-    return this.appdPost(path, payload);
+    const response = await this._appdPost(path, payload);
+    return response.data;
   }
-} 
+}

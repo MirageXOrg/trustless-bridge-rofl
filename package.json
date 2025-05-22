@@ -24,7 +24,7 @@
   "dependencies": {
     "@oasisprotocol/sapphire-ethers-v6": "^6.0.1",
     "@oasisprotocol/sapphire-paratime": "^2.1.0",
-    "axios": "^1.8.4",
+    "axios": "^1.9.0",
     "bip66": "^2.0.0",
     "bitcoin-core": "^5.0.0",
     "bitcoinjs-lib": "^6.1.7",
