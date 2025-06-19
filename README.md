@@ -1,8 +1,19 @@
 # Trustless Bridge ROFL
 
-A TypeScript application dockerized for Oasis ROFL.
+This repository is a part of the **Trustless Bridge** solution, composed of two repositories:  
+- The **ROFL Repository**  
+- The **Smart Contracts Repository**
 
-TODO: Add description and diagrams
+The Trustless Bridge enables seamless, trustless bridging of Bitcoins to **Oasis WBTC**.
+
+## Demo Videos
+
+For an example of the working bridge, see the demo videos below:
+
+- **Demo video part 1:** [https://www.loom.com/share/9191ad891ce24a83a3b50e9da9f70800?sid=f7460a30-2ed7-4104-8591-383ff6a3164b](https://www.loom.com/share/9191ad891ce24a83a3b50e9da9f70800?sid=f7460a30-2ed7-4104-8591-383ff6a3164b)
+- **Demo video part 2:** [https://www.loom.com/share/45120c26b7d249d3bf35a2e0c735e148?sid=eadc12d5-af00-4e36-83f1-ba0eabca5d22](https://www.loom.com/share/45120c26b7d249d3bf35a2e0c735e148?sid=eadc12d5-af00-4e36-83f1-ba0eabca5d22)
+
+
 
 ## Prerequisites
 
